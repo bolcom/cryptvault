@@ -1,0 +1,5 @@
+cryptvault:
+  default-key: 1
+  keys:
+    - version: 1
+      key: hqHKBLV83LpCqzKpf8OvutbCs+O5wX5BPu3btWpEvXA=
