@@ -1,5 +1,4 @@
 [![Maven Central](https://img.shields.io/maven-central/v/com.bol/cryptvault.svg)](http://search.maven.org/#search%7Cga%7C1%7Ccom.bol)
-[![Build Status](https://secure.travis-ci.org/bolcom/cryptvault.svg)](http://travis-ci.org/bolcom/cryptvault)
 
 
 # Cryptvault
