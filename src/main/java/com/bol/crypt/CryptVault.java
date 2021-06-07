@@ -20,7 +20,7 @@ public class CryptVault {
     static final String DEFAULT_ALGORITHM = "AES";
     static final int DEFAULT_SALT_LENGTH = 16;
 
-    private CryptVersion[] cryptVersions = new CryptVersion[256];
+    private final CryptVersion[] cryptVersions = new CryptVersion[256];
     int defaultVersion = -1;
 
     /**
@@ -44,7 +44,9 @@ public class CryptVault {
         return this;
     }
 
-    /** specifies the version used in encrypting new data. default is highest version number. */
+    /**
+     * specifies the version used in encrypting new data. default is highest version number.
+     */
     public CryptVault withDefaultKeyVersion(int defaultVersion) {
         if (defaultVersion < 0 || defaultVersion > 255) throw new IllegalArgumentException("version must be a byte");
         if (cryptVersions[defaultVersion] == null) throw new IllegalArgumentException("version " + defaultVersion + " is undefined");
@@ -58,7 +60,7 @@ public class CryptVault {
         try {
             return Cipher.getInstance(cipher);
         } catch (Exception e) {
-            throw new IllegalStateException("spring-data-mongodb-encrypt: init failed for cipher " + cipher, e);
+            throw new IllegalStateException("init failed for cipher " + cipher, e);
         }
     }
 
@@ -132,15 +134,17 @@ public class CryptVault {
     private CryptVersion cryptVersion(int version) {
         try {
             CryptVersion result = cryptVersions[version];
-            if (result == null) throw new IllegalArgumentException("version " + version + " undefined");
+            if (result == null) throw new CryptOperationException("version " + version + " undefined");
             return result;
         } catch (IndexOutOfBoundsException e) {
-            if (version < 0) throw new IllegalStateException("encryption keys are not initialized");
-            throw new IllegalArgumentException("version must be a byte (0-255)");
+            if (version < 0) throw new CryptOperationException("encryption keys are not initialized");
+            throw new CryptOperationException("version must be a byte (0-255)");
         }
     }
 
-    /** amount of keys defined in this CryptVault */
+    /**
+     * amount of keys defined in this CryptVault
+     */
     public int size() {
         int size = 0;
         for (int i = 0; i < cryptVersions.length; i++) {
@@ -149,15 +153,21 @@ public class CryptVault {
         return size;
     }
 
-    /** AES simply pads to 128 bits */
+    /**
+     * AES simply pads to 128 bits
+     */
     static final Function<Integer, Integer> AESLengthCalculator = i -> (i | 0xf) + 1;
 
-    /** because, you know... java */
+    /**
+     * because, you know... java
+     */
     public static byte toSignedByte(int val) {
         return (byte) (val + Byte.MIN_VALUE);
     }
 
-    /** because, you know... java */
+    /**
+     * because, you know... java
+     */
     public static int fromSignedByte(byte val) {
         return ((int) val - Byte.MIN_VALUE);
     }
