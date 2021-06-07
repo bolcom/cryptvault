@@ -44,6 +44,14 @@ public class CryptVaultAutoConfiguration {
         public void setDefaultKey(Integer defaultKey) {
             this.defaultKey = defaultKey;
         }
+
+        public List<Key> getKeys() {
+            return keys;
+        }
+
+        public Integer getDefaultKey() {
+            return defaultKey;
+        }
     }
 
     public static class Key {
@@ -56,6 +64,14 @@ public class CryptVaultAutoConfiguration {
 
         public void setKey(String key) {
             this.key = key;
+        }
+
+        public int getVersion() {
+            return version;
+        }
+
+        public String getKey() {
+            return key;
         }
     }
 }
