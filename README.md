@@ -23,7 +23,7 @@ Add dependency:
         <dependency>
             <groupId>com.bol</groupId>
             <artifactId>cryptvault</artifactId>
-            <version>1.0.0</version>
+            <version>1.0.2</version>
         </dependency>
 ```
 
