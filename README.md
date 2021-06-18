@@ -1,5 +1,5 @@
 [![Maven Central](https://img.shields.io/maven-central/v/com.bol/cryptvault.svg)](http://search.maven.org/#search%7Cga%7C1%7Ccom.bol)
-
+[![Build](https://github.com/bolcom/cryptvault/actions/workflows/maven.yml/badge.svg)](https://github.com/bolcom/cryptvault/actions)
 
 # Cryptvault
 
