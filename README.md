@@ -20,11 +20,11 @@ Originally developed for [spring-data-mongodb-encrypt](https://github.com/bolcom
 Add dependency:
 
 ```xml
-        <dependency>
-            <groupId>com.bol</groupId>
-            <artifactId>cryptvault</artifactId>
-            <version>1.0.2</version>
-        </dependency>
+<dependency>
+    <groupId>com.bol</groupId>
+    <artifactId>cryptvault</artifactId>
+    <version>1.0.2</version>
+</dependency>
 ```
 
 And add the following to your `application.yml`:
@@ -41,15 +41,15 @@ And you're done!
 Example usage:
 
 ```java
-    @Autowired CryptVault cryptVault;
+@Autowired CryptVault cryptVault;
 
-    // encrypt
-    byte[] encrypted = cryptVault.encrypt("rock".getBytes());
+// encrypt
+byte[] encrypted = cryptVault.encrypt("rock".getBytes());
 
-    // decrypt
-    byte[] decrypted = cryptVault.decrypt(encrypted);
-    
-    new String(decrypted).equals("rock");   // true 
+// decrypt
+byte[] decrypted = cryptVault.decrypt(encrypted);
+
+new String(decrypted).equals("rock");   // true 
 ```
 
 ## Manual configuration
