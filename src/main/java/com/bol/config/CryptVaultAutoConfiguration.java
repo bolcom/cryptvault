@@ -1,16 +1,16 @@
 package com.bol.config;
 
 import com.bol.crypt.CryptVault;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
 
 import java.util.Base64;
 import java.util.List;
 
-@Configuration
+@AutoConfiguration
 @ConditionalOnProperty("cryptvault.keys[0].key")
 public class CryptVaultAutoConfiguration {
 
