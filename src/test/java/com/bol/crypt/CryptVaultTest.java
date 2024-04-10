@@ -3,7 +3,9 @@ package com.bol.crypt;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.Key;
 import java.util.Base64;
 
 import static com.bol.crypt.CryptVault.fromSignedByte;
@@ -95,5 +97,31 @@ public class CryptVaultTest {
 
         assertThat(cryptVault.decrypt(encryptedBytes)).isEqualTo(plainBytes);
         assertThat(cryptVault.decrypt(encryptedBytes2)).isEqualTo(plainBytes);
+    }
+
+    @Test
+    public void differentCipherVersionsShouldLiveSideBySide() {
+        byte[] key = "2~_J2#Kb=_xV3!wMmX3}LAny0fie7:hT".getBytes(StandardCharsets.UTF_8);
+        String aesAlgo = "AES";
+        Key keySpec = new SecretKeySpec(key, aesAlgo);
+
+        int ivLength = 16;
+        String aes256CtrCipher = "AES/CTR/NoPadding";
+        CryptVersion aes256CtrVersion = new CryptVersion(ivLength, aes256CtrCipher, keySpec, i -> i);
+
+        CryptVault vault = new CryptVault();
+        vault.withKey(1, aes256CtrVersion);
+        vault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(2, key);
+
+        String plaintext = "foo";
+
+        byte[] aes256CtrCiphertext = vault.encrypt(1, plaintext.getBytes(StandardCharsets.UTF_8));
+        assertThat(aes256CtrCiphertext[0]).isEqualTo(CryptVault.toSignedByte(1));
+        assertThat(aes256CtrCiphertext.length).isEqualTo(1 + ivLength + plaintext.length());
+
+        byte[] aes256CbcCiphertext = vault.encrypt(2, plaintext.getBytes(StandardCharsets.UTF_8));
+        assertThat(aes256CbcCiphertext[0]).isEqualTo(CryptVault.toSignedByte(2));
+        int paddingLength = plaintext.length() % 16 == 0 ? 16 : 16 - plaintext.length() % 16;
+        assertThat(aes256CbcCiphertext.length).isEqualTo(1 + ivLength + plaintext.length() + paddingLength);
     }
 }
