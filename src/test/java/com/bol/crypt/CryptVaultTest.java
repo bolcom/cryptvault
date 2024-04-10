@@ -3,31 +3,33 @@ package com.bol.crypt;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.spec.GCMParameterSpec;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Base64;
 
-import static com.bol.crypt.CryptVault.fromSignedByte;
-import static com.bol.crypt.CryptVault.toSignedByte;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class CryptVaultTest {
-    private static final byte[] KEY = "VGltVGhlSW5jcmVkaWJsZURldmVsb3BlclNlY3JldCE=".getBytes();
-    private static final String plainText = "The quick brown fox jumps over the lazy dog";
-    private static final byte[] plainBytes = plainText.getBytes(StandardCharsets.UTF_8);
+    private static final String keyBase64 = "VGltVGhlSW5jcmVkaWJsZURldmVsb3BlclNlY3JldCE=";
+    private static final String plaintext = "The quick brown fox jumps over the lazy dog";
+    private static final byte[] plainBytes = plaintext.getBytes(StandardCharsets.UTF_8);
     private CryptVault cryptVault;
 
     @BeforeEach
     public void setup() {
-        byte[] secretKeyBytes = Base64.getDecoder().decode(KEY);
-        cryptVault = new CryptVault()
-                .with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(1, secretKeyBytes);
+        var keyVersions = new KeyVersions();
+        keyVersions.addVersion(new KeyVersion(1, "AES/CBC/PKCS5Padding", keyBase64, false));
+        cryptVault = CryptVault.of(keyVersions);
     }
 
     @Test
     public void consecutiveEncryptsDifferentResults() {
-        byte[] cryptedSecret1 = cryptVault.encrypt(1, plainBytes);
-        byte[] cryptedSecret2 = cryptVault.encrypt(1, plainBytes);
+        KeyVersion firstVersion = cryptVault.keyVersions.get(1).orElseThrow();
+        byte[] cryptedSecret1 = cryptVault.encrypt(firstVersion, plainBytes);
+        byte[] cryptedSecret2 = cryptVault.encrypt(firstVersion, plainBytes);
 
         assertThat(cryptedSecret1.length).isEqualTo(cryptedSecret2.length);
         // version
@@ -49,16 +51,17 @@ public class CryptVaultTest {
         byte[] decryptedBytes = cryptVault.decrypt(encryptedBytes);
         String decryptedString = new String(decryptedBytes, StandardCharsets.UTF_8);
 
-        assertThat(decryptedString).isEqualTo(plainText);
+        assertThat(decryptedString).isEqualTo(plaintext);
     }
 
     @Test
     public void wrongKeyDecryptionFailure() {
         byte[] encryptedBytes = cryptVault.encrypt(plainBytes);
 
-        byte[] keyBytes = Base64.getDecoder().decode("VGhpcyBpcyB0aGUgd3Jvbmcga2V5LCBJJ20gc29ycnk=");
-        CryptVault otherVault = new CryptVault()
-                .with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(1, keyBytes);
+        byte[] otherKeyBytes = Base64.getDecoder().decode("VGhpcyBpcyB0aGUgd3Jvbmcga2V5LCBJJ20gc29ycnk=");
+        var otherKeyVersions = new KeyVersions();
+        otherKeyVersions.addVersion(new KeyVersion(1, "AES/CBC/PKCS5Padding", otherKeyBytes));
+        CryptVault otherVault = CryptVault.of(otherKeyVersions);
 
         assertThrows(CryptOperationException.class, () -> otherVault.decrypt(encryptedBytes));
     }
@@ -66,7 +69,7 @@ public class CryptVaultTest {
     @Test
     public void missingKeyVersionsDecryptionFailure() {
         byte[] encryptedBytes = cryptVault.encrypt(plainBytes);
-        encryptedBytes[0] = toSignedByte('2');
+        encryptedBytes[1] = (byte) 2;
 
         assertThrows(CryptOperationException.class, () -> cryptVault.decrypt(encryptedBytes));
     }
@@ -75,25 +78,97 @@ public class CryptVaultTest {
     public void highestKeyVersionIsDefaultKey() {
         byte[] encryptedBytes = cryptVault.encrypt(plainBytes);
 
-        cryptVault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(2, Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
+        var secondKeyVersion = new KeyVersion(
+                2,
+                "AES/CBC/PKCS5Padding",
+                Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4=")
+        );
+        cryptVault.keyVersions.addVersion(secondKeyVersion);
         byte[] encryptedBytes2 = cryptVault.encrypt(plainBytes);
 
-        assertThat(fromSignedByte(encryptedBytes[0])).isEqualTo(1);
-        assertThat(fromSignedByte(encryptedBytes2[0])).isEqualTo(2);
+        assertThat(encryptedBytes[1]).isEqualTo((byte) 1);
+        assertThat(encryptedBytes2[1]).isEqualTo((byte) 2);
     }
 
     @Test
-    public void keyVersionIsDerivedFromCipher() {
-        cryptVault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(2, Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
+    public void keyVersionIsDerivedFromEncryptedBlob() {
+        var firstKeyVersion = cryptVault.keyVersions.get(1).orElseThrow();
+        var secondKeyVersion = new KeyVersion(
+                2,
+                "ChaCha20-Poly1305",
+                Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
+        cryptVault.keyVersions.addVersion(secondKeyVersion);
 
-        byte[] encryptedBytes = cryptVault.encrypt(1, plainBytes);
+        byte[] encryptedUnderFirstKeyBytes = cryptVault.encrypt(firstKeyVersion, plainBytes);
+        byte[] encryptedUnderSecondKeyBytes = cryptVault.encrypt(secondKeyVersion, plainBytes);
 
-        byte[] encryptedBytes2 = cryptVault.encrypt(2, plainBytes);
+        assertThat(encryptedUnderFirstKeyBytes[1]).isEqualTo((byte) 1);
+        assertThat(encryptedUnderSecondKeyBytes[1]).isEqualTo((byte) 2);
 
-        assertThat(fromSignedByte(encryptedBytes[0])).isEqualTo(1);
-        assertThat(fromSignedByte(encryptedBytes2[0])).isEqualTo(2);
+        assertThat(cryptVault.decrypt(encryptedUnderFirstKeyBytes)).isEqualTo(plainBytes);
+        assertThat(cryptVault.decrypt(encryptedUnderSecondKeyBytes)).isEqualTo(plainBytes);
+    }
 
-        assertThat(cryptVault.decrypt(encryptedBytes)).isEqualTo(plainBytes);
-        assertThat(cryptVault.decrypt(encryptedBytes2)).isEqualTo(plainBytes);
+    @Test
+    public void differentKeyVersionsShouldLiveSideBySide() {
+        byte[] aesKey = "2~_J2#Kb=_xV3!wMmX3}LAny0fie7:hT".getBytes(StandardCharsets.UTF_8);
+        var aes256CtrTransformation = "AES/CTR/NoPadding";
+        var aes256CtrVersion = new KeyVersion(1, aes256CtrTransformation, aesKey);
+
+        var desKey = "jcs&@IwY".getBytes();
+        var desCbcTransformation = "DES/CBC/PKCS5Padding";
+        var desCbcVersion = new KeyVersion(2, desCbcTransformation, desKey);
+
+        var cryptVault = CryptVault.of(KeyVersions.of(aes256CtrVersion, desCbcVersion));
+
+        byte[] aes256CtrBlob = cryptVault.encrypt(aes256CtrVersion, plainBytes);
+        assertThat(aes256CtrBlob[1]).isEqualTo((byte) 1);
+        assertThat(aes256CtrBlob.length).isEqualTo(1 + 1 + 1 + aes256CtrBlob[2] + plaintext.length());
+
+        byte[] chacha20Poly1305Blob = cryptVault.encrypt(desCbcVersion, plainBytes);
+        assertThat(chacha20Poly1305Blob[1]).isEqualTo((byte) 2);
+        int paddingLength = plaintext.length() % 16 == 0 ? 16 : 16 - plaintext.length() % 16;
+        assertThat(chacha20Poly1305Blob.length).isEqualTo(1 + 1 + 1 + chacha20Poly1305Blob[2] + plaintext.length() + paddingLength);
+    }
+
+    @Test
+    public void ecbWithoutIv() {
+        byte[] key = "2~_J2#Kb=_xV3!wMmX3}LAny0fie7:hT".getBytes(StandardCharsets.UTF_8);
+
+        String aes256EcbTransformation = "AES/ECB/PKCS5Padding";
+        var aes256EcbVersion = new KeyVersion(1, aes256EcbTransformation, key);
+        var cryptVersions = KeyVersions.of(aes256EcbVersion);
+        var vault = CryptVault.of(cryptVersions);
+
+        byte[] ciphertext = vault.encrypt(plainBytes);
+        String decryptedText = new String(vault.decrypt(ciphertext));
+
+        assertThat(decryptedText).isEqualTo(plaintext);
+    }
+
+    @Test
+    public void gcmWithSameIvEveryTime() {
+        byte[] key = "2~_J2#Kb=_xV3!wMmX3}LAny0fie7:hT".getBytes(StandardCharsets.UTF_8);
+
+        var aes256GcmTransformation = "AES/GCM/NoPadding";
+        var aes256GcmVersion = new KeyVersion(1, aes256GcmTransformation, key);
+        var keyVersions = KeyVersions.of(aes256GcmVersion);
+        var cryptVault = CryptVault.of(keyVersions);
+
+        byte[] reusedIv = new byte[16];
+        new SecureRandom().nextBytes(reusedIv);
+
+        var algoParamSpec = new GCMParameterSpec(128, reusedIv);
+
+        byte[] firstEncryptedBlob = cryptVault.encrypt(aes256GcmVersion, plainBytes, algoParamSpec);
+        assertThat(firstEncryptedBlob[1]).isEqualTo((byte) 1);
+        assertThat(Arrays.copyOfRange(firstEncryptedBlob, 3, 3 + firstEncryptedBlob[2])).contains(reusedIv);
+
+        byte[] secondEncryptedBlob = cryptVault.encrypt(aes256GcmVersion, plainBytes, algoParamSpec);
+        assertThat(secondEncryptedBlob[1]).isEqualTo((byte) 1);
+        assertThat(Arrays.copyOfRange(secondEncryptedBlob, 1, 3 + secondEncryptedBlob[2])).contains(reusedIv);
+
+        assertThat(new String(cryptVault.decrypt(firstEncryptedBlob))).isEqualTo(plaintext);
+        assertThat(new String(cryptVault.decrypt(secondEncryptedBlob))).isEqualTo(plaintext);
     }
 }

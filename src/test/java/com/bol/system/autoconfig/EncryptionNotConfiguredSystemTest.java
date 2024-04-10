@@ -1,21 +1,19 @@
 package com.bol.system.autoconfig;
 
 import com.bol.crypt.CryptVault;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.junit4.SpringRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@RunWith(SpringRunner.class)
 @EnableAutoConfiguration
-@SpringBootTest(classes = EncryptionNotConfiguredTest.class)
-public class EncryptionNotConfiguredTest {
+@SpringBootTest(classes = EncryptionNotConfiguredSystemTest.class)
+public class EncryptionNotConfiguredSystemTest {
 
-    @Autowired(required = false) CryptVault cryptVault;
+    @Autowired(required = false)
+    CryptVault cryptVault;
 
     @Test
     public void sanityTest() {

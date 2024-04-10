@@ -2,4 +2,19 @@ cryptvault:
   default-key: 1
   keys:
     - version: 1
-      key: hqHKBLV83LpCqzKpf8OvutbCs+O5wX5BPu3btWpEvXA=
+      key: 5DAYjqpqKHK8tzyS6IJEXtsQM/ZQAZ8BOJPgCsQe1sM=
+      legacy: yes
+    - version: 2
+      key: h7giVR4xH4RDYj4VLSCkSUVyxQQoqEgvjWNIStjE0oM=
+      transformation: AES/CTR/NoPadding
+    - version: 3
+      key: X89VgG8A9F2DNZCBUezWBetujpQfvG6bJxytTNWrWM8=
+      transformation: AES/ECB/Pkcs5Padding
+    - version: 4
+      key: VWSMXzwVOT5S887/abibix0zMKghSDFswm2C2SLkFrk=
+      transformation: ChaCha20-Poly1305
+    - version: 5
+      key: j+kZRwQUSu0nseG6LUPecHUoHEintYn9u673rLAPU+s=
+      transformation: AES/GCM/NoPadding
+    - version: 6
+      key: 2FHtWpob9UPrnz7FCT5LnlgmZ6ZqB5U8oQIBJkk+dAc=

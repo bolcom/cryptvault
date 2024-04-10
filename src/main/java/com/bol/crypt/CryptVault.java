@@ -1,179 +1,197 @@
 package com.bol.crypt;
 
-import com.bol.util.JCEPolicy;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.lang.Nullable;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.ShortBufferException;
+import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.IOException;
+import java.security.AlgorithmParameters;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.SecureRandom;
-import java.util.function.Function;
+import java.security.NoSuchAlgorithmException;
+import java.security.spec.AlgorithmParameterSpec;
 
+/**
+ * The main encryptor and decryptor class.
+ * <p>
+ * The binary blobs produced by this library look like (numbers are bits):
+ * <pre>
+ * 0         8         16        24
+ * +---------+---------+---------+--------------------+--------------------+
+ * |proto    |key      |param    |params              |ciphertext          |
+ * |version  |version  |length   |         ...        |            ...     |
+ * |8        |8        |8        |[0,255]             |[16,inf)            |
+ * +---------+---------+---------+--------------------+--------------------+
+ */
 public class CryptVault {
-    static final String DEFAULT_CIPHER = "AES/CBC/PKCS5Padding";
-    static final String DEFAULT_ALGORITHM = "AES";
-    static final int DEFAULT_SALT_LENGTH = 16;
-
-    private final CryptVersion[] cryptVersions = new CryptVersion[256];
-    int defaultVersion = -1;
-
     /**
-     * Helper method for the most used case.
-     * If you even need to change this, or need backwards compatibility, use the more advanced constructor instead.
+     * All the key versions as configured in the external configuration.
      */
-    public CryptVault with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(int version, byte[] secret) {
-        if (secret.length != 32) throw new IllegalArgumentException("invalid AES key size; should be 256 bits!");
+    public KeyVersions keyVersions;
 
-        Key key = new SecretKeySpec(secret, DEFAULT_ALGORITHM);
-        CryptVersion cryptVersion = new CryptVersion(DEFAULT_SALT_LENGTH, DEFAULT_CIPHER, key, AESLengthCalculator);
-        return withKey(version, cryptVersion);
-    }
-
-    public CryptVault withKey(int version, CryptVersion cryptVersion) {
-        if (version < 0 || version > 255) throw new IllegalArgumentException("version must be a byte");
-        if (cryptVersions[version] != null) throw new IllegalArgumentException("version " + version + " is already defined");
-
-        cryptVersions[version] = cryptVersion;
-        if (version > defaultVersion) defaultVersion = version;
-        return this;
+    private CryptVault() {
     }
 
     /**
-     * specifies the version used in encrypting new data. default is highest version number.
+     * Create a new instance initialized with the provided KeyVersions.
+     *
+     * @param keyVersions
+     * @return A new instance.
      */
-    public CryptVault withDefaultKeyVersion(int defaultVersion) {
-        if (defaultVersion < 0 || defaultVersion > 255) throw new IllegalArgumentException("version must be a byte");
-        if (cryptVersions[defaultVersion] == null) throw new IllegalArgumentException("version " + defaultVersion + " is undefined");
-
-        this.defaultVersion = defaultVersion;
-        return this;
+    public static CryptVault of(KeyVersions keyVersions) {
+        CryptVault cryptVault = new CryptVault();
+        cryptVault.keyVersions = keyVersions;
+        return cryptVault;
     }
 
-    // FIXME: have a pool of ciphers (with locks & so), cipher init seems to be very costly (jmh it!)
-    Cipher cipher(String cipher) {
+    /**
+     * Encrypts the given binary blob under the transformation given by the
+     * default key version. Default encryption parameters are used.
+     * <p>
+     * Legacy key versions are only allowed to decrypt, not encrypt.
+     *
+     * @param cleartext Bytes to be encrypted.
+     * @return A self-contained, encrypted binary blob.
+     * @throws CryptOperationException
+     */
+    public byte[] encrypt(byte[] cleartext) throws CryptOperationException {
+        return encrypt(keyVersions.getDefault(), cleartext);
+    }
+
+    /**
+     * Encrypts the given binary blob under the transformation defined in the
+     * given key version. Default encryption parameters are used.
+     * <p>
+     * Legacy key versions are only allowed to decrypt, not encrypt.
+     *
+     * @param keyVersion The key version to encrypt the blob under.
+     * @param cleartext  Bytes to be encrypted.
+     * @return A self-contained, encrypted binary blob.
+     * @throws CryptOperationException
+     */
+    public byte[] encrypt(KeyVersion keyVersion, byte[] cleartext) throws CryptOperationException {
+        return encrypt(keyVersion, cleartext, null);
+    }
+
+    /**
+     * Encrypts the given binary blob under the transformation defined in the
+     * given key version. Algorithm parameters can be tweaked by passing a
+     * custom {@code AlgorithmParameterSpec}.
+     * <p>
+     * Legacy key versions are only allowed to decrypt, not encrypt.
+     *
+     * @param keyVersion    The key version to encrypt the blob under.
+     * @param cleartext     Bytes to be encrypted.
+     * @param algoParamSpec The encryption parameters. Can be null, in which case the defaults for the given algorithm will be used.
+     * @return A self-contained, encrypted binary blob.
+     * @throws CryptOperationException
+     */
+    public byte[] encrypt(KeyVersion keyVersion, byte[] cleartext, @Nullable AlgorithmParameterSpec algoParamSpec) throws CryptOperationException {
+        if (keyVersion.legacy)
+            throw new CryptOperationException("cannot encrypt with legacy key version; hint: create new key version");
+
         try {
-            return Cipher.getInstance(cipher);
-        } catch (Exception e) {
-            throw new IllegalStateException("init failed for cipher " + cipher, e);
-        }
-    }
+            Cipher cipher = Cipher.getInstance(keyVersion.transformation);
 
-    private SecureRandom SECURE_RANDOM = new SecureRandom();
+            String algorithm = keyVersion.transformation.split("/", 2)[0];
+            SecretKeySpec aesKeySpec = new SecretKeySpec(keyVersion.key, algorithm);
 
-    // depending on securerandom implementation (that differs per platform and jvm), this might or might not be necessary.
-    @Scheduled(initialDelay = 3_600_000, fixedDelay = 3_600_000)
-    public void reinitSecureRandomHourly() {
-        SECURE_RANDOM = new SecureRandom();
-    }
+            cipher.init(Cipher.ENCRYPT_MODE, aesKeySpec, algoParamSpec);
 
-    byte[] randomBytes(int numBytes) {
-        byte[] bytes = new byte[numBytes];
-        SECURE_RANDOM.nextBytes(bytes);
-        return bytes;
-    }
+            byte[] ciphertext = cipher.doFinal(cleartext);
 
-    public byte[] encrypt(byte[] data) {
-        return encrypt(defaultVersion, data);
-    }
+            byte[] encodedParams = (cipher.getParameters() == null) ? new byte[0] : cipher.getParameters().getEncoded();
 
-    public byte[] encrypt(int version, byte[] data) {
-        CryptVersion cryptVersion = cryptVersion(version);
-        try {
-            int cryptedLength = cryptVersion.encryptedLength.apply(data.length);
-            byte[] result = new byte[cryptedLength + cryptVersion.saltLength + 1];
-            result[0] = toSignedByte(version);
+            byte[] blob = new byte[1 + 1 + 1 + encodedParams.length + ciphertext.length];
+            blob[0] = (byte) 0x0; // proto version
+            blob[1] = (byte) keyVersion.version; // key version (also defines transformation)
+            blob[2] = (byte) encodedParams.length; // paramLen
+            System.arraycopy(encodedParams, 0, blob, 3, encodedParams.length);
+            System.arraycopy(ciphertext, 0, blob, 3 + encodedParams.length, ciphertext.length);
 
-            byte[] random = randomBytes(cryptVersion.saltLength);
-            IvParameterSpec iv_spec = new IvParameterSpec(random);
-            System.arraycopy(random, 0, result, 1, cryptVersion.saltLength);
-
-            Cipher cipher = cipher(cryptVersion.cipher);
-            cipher.init(Cipher.ENCRYPT_MODE, cryptVersion.key, iv_spec);
-            int len = cipher.doFinal(data, 0, data.length, result, cryptVersion.saltLength + 1);
-
-            return result;
-        } catch (ShortBufferException | IllegalBlockSizeException | BadPaddingException | InvalidAlgorithmParameterException | InvalidKeyException e) {
+            return blob;
+        } catch (NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeyException | IllegalBlockSizeException |
+                 BadPaddingException | IOException | InvalidAlgorithmParameterException e) {
             // wrap checked exception for easy use
-            throw new CryptOperationException("JCE exception caught while encrypting with version " + version, e);
+            throw new CryptOperationException("JCA exception caught while encrypting with key version " + keyVersion.version, e);
         }
     }
 
-    public byte[] decrypt(byte[] data) {
-        int version = fromSignedByte(data[0]);
-        CryptVersion cryptVersion = cryptVersion(version);
+    /**
+     * Decrypts a previously-encrypted, self-contained binary blob. To achieve
+     * compatibility with previous versions of this library, if the first byte
+     * is not a recognized protocol version (currently 00), a "legacy
+     * decryption" is attempted: the blob will be decrypted according to the
+     * legacy decryption process.
+     *
+     * @param blob The previously-encrypted binary blob.
+     * @return The recovered cleartext.
+     * @throws CryptOperationException
+     */
+    public byte[] decrypt(byte[] blob) throws CryptOperationException {
+        int protoVersion = blob[0] & 0xFF;
+        if (protoVersion != 0) {
+            if (keyVersions.isLegacyVersion(blob[0])) {
+                return attemptLegacyDecrypt(blob);
+            }
+            throw new CryptOperationException("cryptvault protocol version in encrypted blob is unknown: " + protoVersion);
+        }
+
+        int blobKeyVersion = blob[1] & 0xFF;
+        KeyVersion keyVersion = keyVersions.get(blobKeyVersion).orElseThrow(
+                () -> new CryptOperationException("key version in encrypted blob is unknown: " + blobKeyVersion));
+
+        int paramLen = blob[2] & 0xFF;
+        byte[] paramsAsBytes = new byte[paramLen];
+        System.arraycopy(blob, 3, paramsAsBytes, 0, paramLen);
 
         try {
-            byte[] random = new byte[cryptVersion.saltLength];
-            System.arraycopy(data, 1, random, 0, cryptVersion.saltLength);
-            IvParameterSpec iv_spec = new IvParameterSpec(random);
+            Cipher decryptionCipher = Cipher.getInstance(keyVersion.transformation);
 
-            Cipher cipher = cipher(cryptVersions[version].cipher);
-            cipher.init(Cipher.DECRYPT_MODE, cryptVersions[version].key, iv_spec);
-            return cipher.doFinal(data, cryptVersion.saltLength + 1, data.length - cryptVersion.saltLength - 1);
-        } catch (InvalidKeyException | InvalidAlgorithmParameterException | IllegalBlockSizeException | BadPaddingException e) {
-            // wrap checked exception for easy use
-            throw new CryptOperationException("JCE exception caught while decrypting with key version " + version, e);
+            AlgorithmParameters algoParams = decryptionCipher.getParameters();
+            AlgorithmParameters storedParams = null;
+            if (algoParams != null) {
+                storedParams = AlgorithmParameters.getInstance(algoParams.getAlgorithm());
+                storedParams.init(paramsAsBytes);
+            }
+
+            String algorithm = keyVersion.transformation.split("/", 2)[0];
+            SecretKeySpec keySpec = new SecretKeySpec(keyVersion.key, algorithm);
+
+            decryptionCipher.init(Cipher.DECRYPT_MODE, keySpec, storedParams);
+
+            return decryptionCipher.doFinal(
+                    blob, 3 + paramLen, blob.length - 3 - paramLen);
+        } catch (InvalidAlgorithmParameterException | NoSuchPaddingException | IllegalBlockSizeException |
+                 NoSuchAlgorithmException | IOException | BadPaddingException | InvalidKeyException e) {
+            throw new CryptOperationException("JCA exception caught while decrypting with key version " + keyVersion.version, e);
         }
     }
 
-    public int expectedCryptedLength(int serializedLength) {
-        return expectedCryptedLength(defaultVersion, serializedLength);
-    }
+    byte[] attemptLegacyDecrypt(byte[] blob) throws RuntimeException {
+        int version = (int) blob[0] - Byte.MIN_VALUE;
+        var legacyKeyVersion = keyVersions.get(version).orElseThrow(
+                () -> new CryptOperationException(String.format("legacy version %d not registered", version))
+        );
 
-    public int expectedCryptedLength(int version, int serializedLength) {
-        CryptVersion cryptVersion = cryptVersion(version);
-        return cryptVersion.saltLength + 1 + cryptVersion.encryptedLength.apply(serializedLength);
-    }
-
-    private CryptVersion cryptVersion(int version) {
+        int keyVersionLength = 1;
+        int ivLength = 16;
+        byte[] ivBytes = new byte[ivLength];
+        System.arraycopy(blob, keyVersionLength, ivBytes, 0, ivLength);
         try {
-            CryptVersion result = cryptVersions[version];
-            if (result == null) throw new CryptOperationException("version " + version + " undefined");
-            return result;
-        } catch (IndexOutOfBoundsException e) {
-            if (version < 0) throw new CryptOperationException("encryption keys are not initialized");
-            throw new CryptOperationException("version must be a byte (0-255)");
+            var ivParamSpec = new IvParameterSpec(ivBytes);
+
+            var cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            var key = new SecretKeySpec(legacyKeyVersion.key, "AES");
+            cipher.init(Cipher.DECRYPT_MODE, key, ivParamSpec);
+            return cipher.doFinal(blob, keyVersionLength + ivLength, blob.length - keyVersionLength - ivLength);
+        } catch (InvalidKeyException | InvalidAlgorithmParameterException | IllegalBlockSizeException |
+                 BadPaddingException | NoSuchPaddingException | NoSuchAlgorithmException e) {
+            throw new CryptOperationException("JCA exception caught while attempting legacy decryption with key version " + version, e);
         }
-    }
-
-    /**
-     * amount of keys defined in this CryptVault
-     */
-    public int size() {
-        int size = 0;
-        for (int i = 0; i < cryptVersions.length; i++) {
-            if (cryptVersions[i] != null) size++;
-        }
-        return size;
-    }
-
-    /**
-     * AES simply pads to 128 bits
-     */
-    static final Function<Integer, Integer> AESLengthCalculator = i -> (i | 0xf) + 1;
-
-    /**
-     * because, you know... java
-     */
-    public static byte toSignedByte(int val) {
-        return (byte) (val + Byte.MIN_VALUE);
-    }
-
-    /**
-     * because, you know... java
-     */
-    public static int fromSignedByte(byte val) {
-        return ((int) val - Byte.MIN_VALUE);
-    }
-
-    static {
-        // stupid JCE
-        JCEPolicy.allowUnlimitedStrength();
     }
 }
