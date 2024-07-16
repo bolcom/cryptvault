@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
+import java.util.Arrays;
 import java.util.Base64;
 
 import static com.bol.crypt.CryptVault.fromSignedByte;
@@ -23,7 +24,7 @@ public class CryptVaultTest {
     public void setup() {
         byte[] secretKeyBytes = Base64.getDecoder().decode(KEY);
         cryptVault = new CryptVault()
-                .with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(1, secretKeyBytes);
+                .with256BitAesCbcPkcs5PaddingAnd16ByteIv(1, secretKeyBytes);
     }
 
     @Test
@@ -60,7 +61,7 @@ public class CryptVaultTest {
 
         byte[] keyBytes = Base64.getDecoder().decode("VGhpcyBpcyB0aGUgd3Jvbmcga2V5LCBJJ20gc29ycnk=");
         CryptVault otherVault = new CryptVault()
-                .with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(1, keyBytes);
+                .with256BitAesCbcPkcs5PaddingAnd16ByteIv(1, keyBytes);
 
         assertThrows(CryptOperationException.class, () -> otherVault.decrypt(encryptedBytes));
     }
@@ -77,7 +78,7 @@ public class CryptVaultTest {
     public void highestKeyVersionIsDefaultKey() {
         byte[] encryptedBytes = cryptVault.encrypt(plainBytes);
 
-        cryptVault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(2, Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
+        cryptVault.with256BitAesCbcPkcs5PaddingAnd16ByteIv(2, Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
         byte[] encryptedBytes2 = cryptVault.encrypt(plainBytes);
 
         assertThat(fromSignedByte(encryptedBytes[0])).isEqualTo(1);
@@ -86,7 +87,7 @@ public class CryptVaultTest {
 
     @Test
     public void keyVersionIsDerivedFromCipher() {
-        cryptVault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(2, Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
+        cryptVault.with256BitAesCbcPkcs5PaddingAnd16ByteIv(2, Base64.getDecoder().decode("IqWTpi549pJDZ1kuc9HppcMxtPfu2SP6Idlh+tz4LL4="));
 
         byte[] encryptedBytes = cryptVault.encrypt(1, plainBytes);
 
@@ -107,11 +108,11 @@ public class CryptVaultTest {
 
         int ivLength = 16;
         String aes256CtrCipher = "AES/CTR/NoPadding";
-        CryptVersion aes256CtrVersion = new CryptVersion(ivLength, aes256CtrCipher, keySpec, i -> i);
+        CryptVersion aes256CtrVersion = new CryptVersion(1, ivLength, aes256CtrCipher, keySpec, i -> i);
 
         CryptVault vault = new CryptVault();
         vault.withKey(1, aes256CtrVersion);
-        vault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(2, key);
+        vault.with256BitAesCbcPkcs5PaddingAnd16ByteIv(2, key);
 
         String plaintext = "foo";
 
@@ -123,5 +124,50 @@ public class CryptVaultTest {
         assertThat(aes256CbcCiphertext[0]).isEqualTo(CryptVault.toSignedByte(2));
         int paddingLength = plaintext.length() % 16 == 0 ? 16 : 16 - plaintext.length() % 16;
         assertThat(aes256CbcCiphertext.length).isEqualTo(1 + ivLength + plaintext.length() + paddingLength);
+    }
+
+    @Test
+    public void ecbWithoutIv() {
+        byte[] key = "2~_J2#Kb=_xV3!wMmX3}LAny0fie7:hT".getBytes(StandardCharsets.UTF_8);
+        String aesAlgo = "AES";
+        Key keySpec = new SecretKeySpec(key, aesAlgo);
+
+        String aes256CtrCipher = "AES/ECB/Pkcs5Padding";
+        CryptVersion aes256EcbVersion = new CryptVersion(1, 0, aes256CtrCipher, keySpec, i -> (i | 0xf) + 1);
+
+        CryptVault vault = new CryptVault().withKey(1, aes256EcbVersion);
+
+        String plaintext = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor";
+        byte[] ciphertext = vault.encrypt(plaintext.getBytes());
+        String decryptedText = new String(vault.decrypt(ciphertext));
+
+        assertThat(decryptedText).isEqualTo(plaintext);
+    }
+
+    @Test
+    public void cbcWithSameIvEveryTime() {
+        byte[] key = "2~_J2#Kb=_xV3!wMmX3}LAny0fie7:hT".getBytes(StandardCharsets.UTF_8);
+        String aesAlgo = "AES";
+        Key keySpec = new SecretKeySpec(key, aesAlgo);
+
+        String aes256CtrCipher = "AES/CBC/Pkcs5Padding";
+        CryptVersion aes256EcbVersion = new CryptVersion(1, 16, aes256CtrCipher, keySpec, i -> (i | 0xf) + 1);
+
+        CryptVault vault = new CryptVault().withKey(1, aes256EcbVersion);
+
+        String plaintext = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor";
+
+        byte[] reusedIv = vault.randomBytes(16);
+
+        byte[] firstCiphertext = vault.encrypt(plaintext.getBytes(), reusedIv);
+        assertThat(firstCiphertext[0]).isEqualTo((byte) 0x81);
+        assertThat(Arrays.copyOfRange(firstCiphertext, 1, 1 + reusedIv.length)).isEqualTo(reusedIv);
+
+        byte[] secondCiphertext = vault.encrypt(plaintext.getBytes(), reusedIv);
+        assertThat(secondCiphertext[0]).isEqualTo((byte) 0x81);
+        assertThat(Arrays.copyOfRange(secondCiphertext, 1, 1 + reusedIv.length)).isEqualTo(reusedIv);
+
+        assertThat(new String(vault.decrypt(firstCiphertext))).isEqualTo(plaintext);
+        assertThat(new String(vault.decrypt(secondCiphertext))).isEqualTo(plaintext);
     }
 }

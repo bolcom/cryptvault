@@ -1,6 +1,7 @@
 package com.bol.crypt;
 
 import com.bol.util.JCEPolicy;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import javax.crypto.BadPaddingException;
@@ -13,12 +14,13 @@ import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.Key;
 import java.security.SecureRandom;
+import java.util.Objects;
 import java.util.function.Function;
 
 public class CryptVault {
     static final String DEFAULT_CIPHER = "AES/CBC/PKCS5Padding";
     static final String DEFAULT_ALGORITHM = "AES";
-    static final int DEFAULT_SALT_LENGTH = 16;
+    static final int DEFAULT_IV_LENGTH = 16;
 
     private final CryptVersion[] cryptVersions = new CryptVersion[256];
     int defaultVersion = -1;
@@ -27,11 +29,11 @@ public class CryptVault {
      * Helper method for the most used case.
      * If you even need to change this, or need backwards compatibility, use the more advanced constructor instead.
      */
-    public CryptVault with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(int version, byte[] secret) {
+    public CryptVault with256BitAesCbcPkcs5PaddingAnd16ByteIv(int version, byte[] secret) {
         if (secret.length != 32) throw new IllegalArgumentException("invalid AES key size; should be 256 bits!");
 
         Key key = new SecretKeySpec(secret, DEFAULT_ALGORITHM);
-        CryptVersion cryptVersion = new CryptVersion(DEFAULT_SALT_LENGTH, DEFAULT_CIPHER, key, AESLengthCalculator);
+        CryptVersion cryptVersion = new CryptVersion(version, DEFAULT_IV_LENGTH, DEFAULT_CIPHER, key, AESLengthCalculator);
         return withKey(version, cryptVersion);
     }
 
@@ -79,28 +81,67 @@ public class CryptVault {
     }
 
     public byte[] encrypt(byte[] data) {
-        return encrypt(defaultVersion, data);
+        CryptVersion cryptVersion = cryptVersion(defaultVersion);
+        if (cryptVersion.requiresIv()) {
+            return encrypt(cryptVersion, data);
+        } else {
+            return encrypt(cryptVersion, data, null);
+        }
     }
 
     public byte[] encrypt(int version, byte[] data) {
-        CryptVersion cryptVersion = cryptVersion(version);
-        try {
-            int cryptedLength = cryptVersion.encryptedLength.apply(data.length);
-            byte[] result = new byte[cryptedLength + cryptVersion.saltLength + 1];
-            result[0] = toSignedByte(version);
+        return encrypt(cryptVersion(version), data);
+    }
 
-            byte[] random = randomBytes(cryptVersion.saltLength);
-            IvParameterSpec iv_spec = new IvParameterSpec(random);
-            System.arraycopy(random, 0, result, 1, cryptVersion.saltLength);
+    byte[] encrypt(CryptVersion version, byte[] data) {
+        return encrypt(version, data, randomBytes(version.ivLength));
+    }
+
+    public byte[] encrypt(byte[] data, @Nullable byte[] iv) {
+        return encrypt(cryptVersion(defaultVersion), data, iv);
+    }
+
+    public byte[] encrypt(int version, byte[] data, @Nullable byte[] iv) {
+        return encrypt(cryptVersion(version), data, iv);
+    }
+
+    byte[] encrypt(CryptVersion cryptVersion, byte[] data, @Nullable byte[] iv) {
+        if (cryptVersion.requiresIv()) {
+            Objects.requireNonNull(iv,
+                    String.format("CryptVersion %d [cipher=%s] requires non-null IV",
+                            cryptVersion.version,
+                            cryptVersion.cipher)
+            );
+            if (cryptVersion.ivLength != iv.length) {
+                throw new IllegalArgumentException(
+                        String.format("CryptVersion %d [cipher=%s] requires IV of length %d, got %d",
+                                cryptVersion.version,
+                                cryptVersion.cipher,
+                                cryptVersion.ivLength,
+                                iv.length)
+                );
+            }
+        }
+
+        try {
+            int ciphertextLength = cryptVersion.ciphertextLength.apply(data.length);
+            byte[] result = new byte[1 + cryptVersion.ivLength + ciphertextLength];
+            result[0] = toSignedByte(cryptVersion.version);
+
+            IvParameterSpec ivParamSpec = null;
+            if (iv != null) {
+                ivParamSpec = new IvParameterSpec(iv);
+                System.arraycopy(iv, 0, result, 1, cryptVersion.ivLength);
+            }
 
             Cipher cipher = cipher(cryptVersion.cipher);
-            cipher.init(Cipher.ENCRYPT_MODE, cryptVersion.key, iv_spec);
-            int len = cipher.doFinal(data, 0, data.length, result, cryptVersion.saltLength + 1);
+            cipher.init(Cipher.ENCRYPT_MODE, cryptVersion.key, ivParamSpec);
+            cipher.doFinal(data, 0, data.length, result, cryptVersion.ivLength + 1);
 
             return result;
         } catch (ShortBufferException | IllegalBlockSizeException | BadPaddingException | InvalidAlgorithmParameterException | InvalidKeyException e) {
             // wrap checked exception for easy use
-            throw new CryptOperationException("JCE exception caught while encrypting with version " + version, e);
+            throw new CryptOperationException("JCE exception caught while encrypting with version " + cryptVersion.version, e);
         }
     }
 
@@ -109,26 +150,29 @@ public class CryptVault {
         CryptVersion cryptVersion = cryptVersion(version);
 
         try {
-            byte[] random = new byte[cryptVersion.saltLength];
-            System.arraycopy(data, 1, random, 0, cryptVersion.saltLength);
-            IvParameterSpec iv_spec = new IvParameterSpec(random);
+            IvParameterSpec ivParamSpec = null;
+            if (cryptVersion.requiresIv()) {
+                byte[] random = new byte[cryptVersion.ivLength];
+                System.arraycopy(data, 1, random, 0, cryptVersion.ivLength);
+                ivParamSpec = new IvParameterSpec(random);
+            }
 
             Cipher cipher = cipher(cryptVersions[version].cipher);
-            cipher.init(Cipher.DECRYPT_MODE, cryptVersions[version].key, iv_spec);
-            return cipher.doFinal(data, cryptVersion.saltLength + 1, data.length - cryptVersion.saltLength - 1);
+            cipher.init(Cipher.DECRYPT_MODE, cryptVersions[version].key, ivParamSpec);
+            return cipher.doFinal(data, cryptVersion.ivLength + 1, data.length - cryptVersion.ivLength - 1);
         } catch (InvalidKeyException | InvalidAlgorithmParameterException | IllegalBlockSizeException | BadPaddingException e) {
             // wrap checked exception for easy use
             throw new CryptOperationException("JCE exception caught while decrypting with key version " + version, e);
         }
     }
 
-    public int expectedCryptedLength(int serializedLength) {
-        return expectedCryptedLength(defaultVersion, serializedLength);
+    public int calculateEncryptedBlobSize(int serializedLength) {
+        return calculateEncryptedBlobSize(defaultVersion, serializedLength);
     }
 
-    public int expectedCryptedLength(int version, int serializedLength) {
+    public int calculateEncryptedBlobSize(int version, int serializedLength) {
         CryptVersion cryptVersion = cryptVersion(version);
-        return cryptVersion.saltLength + 1 + cryptVersion.encryptedLength.apply(serializedLength);
+        return cryptVersion.ivLength + 1 + cryptVersion.ciphertextLength.apply(serializedLength);
     }
 
     private CryptVersion cryptVersion(int version) {

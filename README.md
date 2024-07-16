@@ -23,7 +23,7 @@ Add dependency:
 <dependency>
     <groupId>com.bol</groupId>
     <artifactId>cryptvault</artifactId>
-    <version>1.0.2</version>
+    <version>3-1.0.2</version>
 </dependency>
 ```
 
@@ -93,4 +93,7 @@ to override which version of the defined keys is considered 'default'.
 
 ## Expected size of encrypted data
 
-Depending on how much padding is used, you can expect 17..33 bytes for encryption overhead (salt + padding).
+Depending on the cipher, whether an IV is used and the padding scheme you must
+expect some overhead for encryption. The default cipher, AES-256-CBC with PKCS
+#5 padding, requires an extra [18, 33] bytes: version (1) + IV (16) + padding
+(best case: 1, worst case: 16).

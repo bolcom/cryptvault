@@ -21,7 +21,7 @@ public class CryptVaultAutoConfiguration {
 
         for (Key key : properties.keys) {
             byte[] secretKeyBytes = Base64.getDecoder().decode(key.key);
-            cryptVault.with256BitAesCbcPkcs5PaddingAnd128BitSaltKey(key.version, secretKeyBytes);
+            cryptVault.with256BitAesCbcPkcs5PaddingAnd16ByteIv(key.version, secretKeyBytes);
         }
 
         if (properties.defaultKey != null) {
